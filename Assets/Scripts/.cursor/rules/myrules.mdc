@@ -1,0 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+1.代码必须满足面向对象的特性
+2.尽量使用Unity成熟的框架结构
+3.不要过于发散思维
