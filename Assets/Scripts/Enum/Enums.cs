@@ -23,10 +23,9 @@ public enum BlockType
 /// </summary>
 public enum BoosterType
 {
-    HorizontalBomb,
-    VerticalBomb,
-    Dynamite,
-    ColorBomb
+    FansTile,
+    MoneyTile,
+    MoodAddTile,
 }
 
 public enum PlayerType

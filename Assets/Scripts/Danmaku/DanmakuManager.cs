@@ -1,57 +1,51 @@
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.UI;
 using TMPro;
+using System.Collections.Generic;
+using UnityEngine.UI;
 
 /// <summary>
-/// 弹幕管理器，负责弹幕的显示、回收和轨道管理
+/// 弹幕管理器，负责弹幕的生成和管理
 /// </summary>
 public class DanmakuManager : MonoBehaviour
 {
-    #region 弹幕预制体
-    [Header("弹幕预制体")]
-    [SerializeField] private GameObject normalDanmakuPrefab;    // 普通弹幕预制体
-    [SerializeField] private GameObject superChatPrefab;        // SC预制体
-    [SerializeField] private GameObject badDanmakuPrefab;       // 负面弹幕预制体
-    [SerializeField] private GameObject specialDanmakuPrefab;   // 特殊弹幕预制体
-    #endregion
-
-    #region 弹幕设置
     [Header("弹幕设置")]
-    [SerializeField] private float defaultSpeed = 80f;         // 默认弹幕移动速度
-    [SerializeField] private int maxDanmakuCount = 100;         // 最大同时显示的弹幕数量
-    [SerializeField] private int columnCount = 4;               // 弹幕列数
-    [SerializeField] private float danmakuWidth = 300f;         // 弹幕宽度
-    [SerializeField] private float columnSpacing = 20f;         // 列间距
-    [SerializeField] private Transform danmakuContainer;        // 弹幕容器
+    [SerializeField] private Transform danmakuContainer;  // 弹幕容器
+    [SerializeField] private Transform spawnPosition; // 生成位置
+    [SerializeField] private float defaultSpeed = 100f;   // 默认上升速度
+    [SerializeField] private float verticalSpacing = 10f; // 弹幕之间的垂直间距
+    [SerializeField] private float minSpawnInterval = 0.5f; // 最小生成间隔
+    [SerializeField] private float initialSpawnY = -200f;  // 初始生成Y坐标
+    [SerializeField] private float maxSpawnY = 200f;      // 最大Y坐标限制
     
-    [Header("聊天窗口设置")]
-    [SerializeField] private RectTransform chatWindowRect;      // 聊天窗口矩形区域
-    [SerializeField] private float topPadding = 10f;            // 顶部间距
-    [SerializeField] private float bottomPadding = 10f;         // 底部间距
-
-    [Header("垂直对齐设置")]
-    [SerializeField] private bool useFixedPositions = true;      // 是否使用固定位置
-    [SerializeField] private float verticalSpacing = 10f;        // 垂直间距
-    [SerializeField] private bool allowOverlap = false;          // 是否允许弹幕重叠
-    #endregion
-
-    #region 对象池
-    // 弹幕对象池
-    private Queue<GameObject> normalDanmakuPool = new Queue<GameObject>();
-    private Queue<GameObject> superChatPool = new Queue<GameObject>();
-    private Queue<GameObject> badDanmakuPool = new Queue<GameObject>();
-    private Queue<GameObject> specialDanmakuPool = new Queue<GameObject>();
+    [Header("弹幕生成设置")]
+    private float baseInterval = 10.0f;  // 基础弹幕生成间隔
+    private float minInterval = 2.0f;    // 最小弹幕生成间隔
+    private int playCount = 0;           // 播放数计数
+    [SerializeField] private float scChance = 0.2f;      // SC弹幕概率 (20%)
+    [SerializeField] private float badChance = 0.05f;    // 恶评概率 (5%)
     
-    // 当前活跃弹幕列表
-    private List<GameObject> activeDanmakus = new List<GameObject>();
-    #endregion
-
-    #region 列管理
-    // 列占用情况（记录每列最上方弹幕的上边缘位置）
-    private float[] columnTopEdges;
-    #endregion
+    private float currentInterval;        // 当前弹幕生成间隔
+    private float danmakuTimer;          // 弹幕生成计时器
+    private float lastSpawnTime;         // 上次生成弹幕的时间
+    private DanmakuPools danmakuPools;   // 弹幕对象池管理器
+    
+    // 弹幕队列
+    private Queue<DanmakuInfo> danmakuQueue = new Queue<DanmakuInfo>();
+    
+    // 弹幕信息结构
+    private struct DanmakuInfo
+    {
+        public string content;
+        public string username;
+        public int type;
+        
+        public DanmakuInfo(string content, string username, int type)
+        {
+            this.content = content;
+            this.username = username;
+            this.type = type;
+        }
+    }
 
     #region 单例实现
     private static DanmakuManager _instance;
@@ -64,6 +58,7 @@ public class DanmakuManager : MonoBehaviour
                 _instance = FindObjectOfType<DanmakuManager>();
                 if (_instance == null)
                 {
+                    Debug.LogError("场景中未找到DanmakuManager实例！");
                     GameObject go = new GameObject("DanmakuManager");
                     _instance = go.AddComponent<DanmakuManager>();
                 }
@@ -79,496 +74,329 @@ public class DanmakuManager : MonoBehaviour
         {
             _instance = this;
             DontDestroyOnLoad(gameObject);
+            
+            // 获取弹幕对象池管理器
+            danmakuPools = DanmakuPools.Instance;
+            
+            // 检查必要组件
+            ValidateComponents();
         }
         else if (_instance != this)
         {
             Destroy(gameObject);
-            return;
-        }
-
-        // 初始化列数据
-        columnTopEdges = new float[columnCount];
-        ResetColumnTopEdges();
-
-        // 初始化对象池
-        InitializePools();
-        
-        // 如果没有设置聊天窗口矩形，则使用弹幕容器的矩形
-        if (chatWindowRect == null && danmakuContainer != null)
-        {
-            chatWindowRect = danmakuContainer as RectTransform;
         }
     }
 
-    private void ResetColumnTopEdges()
+    private void Start()
     {
-        for (int i = 0; i < columnCount; i++)
-        {
-            // 初始时列为空，设置为聊天窗口底部
-            columnTopEdges[i] = GetChatWindowBottomEdge();
-        }
-    }
-    
-    private float GetChatWindowBottomEdge()
-    {
-        if (chatWindowRect != null)
-        {
-            return chatWindowRect.rect.yMin + bottomPadding;
-        }
-        return bottomPadding;
-    }
-    
-    private float GetChatWindowTopEdge()
-    {
-        if (chatWindowRect != null)
-        {
-            return chatWindowRect.rect.yMax - topPadding;
-        }
-        return Screen.height - topPadding;
-    }
-    
-    private float GetChatWindowWidth()
-    {
-        if (chatWindowRect != null)
-        {
-            return chatWindowRect.rect.width;
-        }
-        return Screen.width;
+        currentInterval = baseInterval;
+        danmakuTimer = currentInterval;
     }
 
     private void Update()
     {
-        // 更新弹幕位置和状态
-        UpdateDanmakus();
-    }
-
-    /// <summary>
-    /// 初始化弹幕对象池
-    /// </summary>
-    private void InitializePools()
-    {
-        // 初始化各种弹幕池
-        for (int i = 0; i < 20; i++)
-        {
-            CreatePoolItem(normalDanmakuPrefab, normalDanmakuPool);
-            CreatePoolItem(superChatPrefab, superChatPool);
-            CreatePoolItem(badDanmakuPrefab, badDanmakuPool);
-            CreatePoolItem(specialDanmakuPrefab, specialDanmakuPool);
-        }
-    }
-
-    /// <summary>
-    /// 创建对象池项
-    /// </summary>
-    private void CreatePoolItem(GameObject prefab, Queue<GameObject> pool)
-    {
-        if (prefab == null) return;
-
-        GameObject item = Instantiate(prefab, danmakuContainer);
-        item.SetActive(false);
-        pool.Enqueue(item);
-    }
-
-    /// <summary>
-    /// 从池中获取弹幕对象
-    /// </summary>
-    private GameObject GetPoolItem(Queue<GameObject> pool, GameObject prefab)
-    {
-        if (pool.Count == 0)
-        {
-            // 池中无可用对象，创建新对象
-            CreatePoolItem(prefab, pool);
-        }
-
-        GameObject item = pool.Dequeue();
-        item.SetActive(true);
-        activeDanmakus.Add(item);
-        return item;
-    }
-
-    /// <summary>
-    /// 返回弹幕对象到池中
-    /// </summary>
-    private void ReturnToPool(GameObject item)
-    {
-        // 按弹幕类型返回到对应的池
-        activeDanmakus.Remove(item);
-        item.SetActive(false);
-
-        // 重置弹幕状态
-        DanmakuItem danmakuItem = item.GetComponent<DanmakuItem>();
-        if (danmakuItem != null)
-        {
-            danmakuItem.Reset();
-        }
-
-        // 判断弹幕类型并归还到正确的池
-        if (item.name.Contains(normalDanmakuPrefab.name))
-        {
-            normalDanmakuPool.Enqueue(item);
-        }
-        else if (item.name.Contains(superChatPrefab.name))
-        {
-            superChatPool.Enqueue(item);
-        }
-        else if (item.name.Contains(badDanmakuPrefab.name))
-        {
-            badDanmakuPool.Enqueue(item);
-        }
-        else if (item.name.Contains(specialDanmakuPrefab.name))
-        {
-            specialDanmakuPool.Enqueue(item);
-        }
-    }
-
-    /// <summary>
-    /// 更新所有活跃弹幕状态
-    /// </summary>
-    private void UpdateDanmakus()
-    {
-        // 临时列表存储需要回收的弹幕
-        List<GameObject> toRecycle = new List<GameObject>();
+        // 处理自动生成弹幕
+        ProcessDanmaku();
         
-        // 聊天窗口上边界(移除的位置)
-        float chatWindowTopEdge = GetChatWindowTopEdge();
-        
-        // 更新每个弹幕位置和状态
-        foreach (GameObject danmaku in activeDanmakus)
-        {
-            DanmakuItem item = danmaku.GetComponent<DanmakuItem>();
-            if (item == null) continue;
+        // 处理队列中的弹幕
+        ProcessDanmakuQueue();
+    }
 
-            // 更新生命周期
-            item.UpdateLifetime(Time.deltaTime);
+    /// <summary>
+    /// 验证必要组件
+    /// </summary>
+    private void ValidateComponents()
+    {
+        if (danmakuPools == null)
+        {
+            Debug.LogError("未找到弹幕对象池管理器！");
+            return;
+        }
+
+        if (danmakuContainer == null)
+        {
+            Debug.LogWarning("弹幕容器未设置，将创建新容器。");
+            GameObject container = new GameObject("DanmakuContainer");
+            danmakuContainer = container.transform;
+            danmakuContainer.SetParent(transform);
+        }
+    }
+
+    /// <summary>
+    /// 更新播放数并调整弹幕生成间隔
+    /// </summary>
+    public void IncrementPlayCount()
+    {
+        playCount++;
+        
+        // 每50次播放减少0.5秒间隔
+        float intervalReduction = (playCount / 50) * 0.5f;
+        currentInterval = Mathf.Max(minInterval, baseInterval - intervalReduction);
+        
+        Debug.Log($"播放数: {playCount}, 当前弹幕间隔: {currentInterval}秒");
+    }
+
+    /// <summary>
+    /// 处理弹幕队列
+    /// </summary>
+    private void ProcessDanmakuQueue()
+    {
+        if (danmakuQueue.Count > 0 && Time.time >= lastSpawnTime + minSpawnInterval)
+        {
+            DanmakuInfo info = danmakuQueue.Dequeue();
+            SpawnDanmaku(info.content, info.username, info.type);
+            lastSpawnTime = Time.time;
+        }
+    }
+
+    /// <summary>
+    /// 处理弹幕生成
+    /// </summary>
+    private void ProcessDanmaku()
+    {
+        danmakuTimer -= Time.deltaTime;
+        if (danmakuTimer <= 0)
+        {
+            // 获取随机弹幕数据
+            Caption caption = DataManager.Instance.GetRandomCaption();
+            if (caption != null)
+            {
+                // 根据概率决定弹幕类型
+                float rand = Random.value;
+                int danmakuType;
+                
+                if (rand < badChance)
+                {
+                    danmakuType = 3; // 恶评 (5%)
+                }
+                else if (rand < (badChance + scChance))
+                {
+                    danmakuType = 2; // SC (20%)
+                }
+                else
+                {
+                    danmakuType = 1; // 普通弹幕 (75%)
+                }
+                
+                // 将弹幕添加到队列
+                EnqueueDanmaku(caption.text, caption.name, danmakuType);
+                
+                // 增加播放数并更新间隔
+                IncrementPlayCount();
+            }
             
-            // 更新位置
+            // 重置计时器，使用当前计算出的间隔
+            danmakuTimer = currentInterval;
+        }
+    }
+
+    /// <summary>
+    /// 将弹幕添加到队列
+    /// </summary>
+    private void EnqueueDanmaku(string content, string username, int type)
+    {
+        danmakuQueue.Enqueue(new DanmakuInfo(content, username, type));
+    }
+
+    /// <summary>
+    /// 生成单个弹幕
+    /// </summary>
+    private void SpawnDanmaku(string content, string username, int type)
+    {
+        if (string.IsNullOrEmpty(content))
+        {
+            Debug.LogWarning("弹幕内容不能为空！");
+            return;
+        }
+
+        if (danmakuPools == null || spawnPosition == null)
+        {
+            Debug.LogError("弹幕系统未正确初始化或生成位置未设置！");
+            return;
+        }
+
+        try
+        {
+            // 从对象池获取弹幕对象
+            GameObject danmaku = danmakuPools.GetDanmakuByType(type);
+            if (danmaku == null)
+            {
+                Debug.LogError($"无法从对象池获取类型 {type} 的弹幕对象！");
+                return;
+            }
+
+            // 设置父物体
+            if (danmakuContainer != null)
+            {
+                danmaku.transform.SetParent(danmakuContainer);
+            }
+            
+            // 设置文本
+            TextMeshProUGUI contentText = danmaku.GetComponentInChildren<TextMeshProUGUI>();
+            if (contentText != null)
+            {
+                contentText.text = string.IsNullOrEmpty(username) ? content : $"{username}: {content}";
+            }
+            else
+            {
+                Debug.LogError("弹幕对象缺少TextMeshProUGUI组件！");
+                return;
+            }
+
+            // 获取当前弹幕的RectTransform
             RectTransform rectTransform = danmaku.GetComponent<RectTransform>();
-            if (rectTransform != null)
+            if (rectTransform == null)
             {
-                // 向上移动弹幕
-                Vector2 position = rectTransform.anchoredPosition;
-                position.y += item.speed * Time.deltaTime;
-                rectTransform.anchoredPosition = position;
-                
-                // 获取弹幕高度
-                float danmakuHeight = rectTransform.rect.height;
-                
-                // 更新该列的最上边缘位置
-                if (item.columnIndex >= 0 && item.columnIndex < columnCount)
-                {
-                    float topEdge = position.y + danmakuHeight / 2; // 计算弹幕上边缘
-                    if (topEdge > columnTopEdges[item.columnIndex])
-                    {
-                        columnTopEdges[item.columnIndex] = topEdge;
-                    }
-                }
-
-                // 检查是否移出聊天窗口或生命周期结束
-                if (position.y > chatWindowTopEdge || item.lifetime <= 0)
-                {
-                    toRecycle.Add(danmaku);
-                }
+                Debug.LogError("弹幕对象缺少RectTransform组件！");
+                return;
             }
-        }
 
-        // 回收需要回收的弹幕
-        foreach (GameObject danmaku in toRecycle)
-        {
-            ReturnToPool(danmaku);
-        }
-        
-        // 如果使用固定位置，重新整理每列中弹幕的位置
-        if (useFixedPositions)
-        {
-            // 为每列创建弹幕列表
-            List<GameObject>[] columnDanmakus = new List<GameObject>[columnCount];
-            for (int i = 0; i < columnCount; i++)
+            // 强制布局刷新以获取正确的高度
+            LayoutRebuilder.ForceRebuildLayoutImmediate(rectTransform);
+
+            // 设置到生成位置
+            RectTransform spawnRect = spawnPosition as RectTransform;
+            if (spawnRect != null)
             {
-                columnDanmakus[i] = new List<GameObject>();
+                // 使用spawnPosition的UI坐标
+                rectTransform.anchoredPosition = spawnRect.anchoredPosition;
+                rectTransform.anchorMin = spawnRect.anchorMin;
+                rectTransform.anchorMax = spawnRect.anchorMax;
+                rectTransform.pivot = spawnRect.pivot;
             }
-            
-            // 收集每列中的弹幕
-            foreach (GameObject danmaku in activeDanmakus)
+            else
             {
-                DanmakuItem item = danmaku.GetComponent<DanmakuItem>();
-                if (item != null && item.columnIndex >= 0 && item.columnIndex < columnCount)
+                // 如果spawnPosition不是RectTransform，使用世界坐标转换为UI坐标
+                Vector2 screenPoint = RectTransformUtility.WorldToScreenPoint(Camera.main, spawnPosition.position);
+                Vector2 localPoint;
+                RectTransform parentRect = danmakuContainer as RectTransform;
+                if (parentRect != null && RectTransformUtility.ScreenPointToLocalPointInRectangle(parentRect, screenPoint, Camera.main, out localPoint))
                 {
-                    columnDanmakus[item.columnIndex].Add(danmaku);
+                    rectTransform.anchoredPosition = localPoint;
                 }
             }
+
+            rectTransform.localScale = Vector3.one;
             
-            // 处理每列中的弹幕
-            for (int i = 0; i < columnCount; i++)
+            // 初始化弹幕组件
+            DanmakuItem item = danmaku.GetComponent<DanmakuItem>();
+            if (item == null)
             {
-                // 按Y坐标从小到大排序弹幕
-                columnDanmakus[i].Sort((a, b) => {
-                    RectTransform rectA = a.GetComponent<RectTransform>();
-                    RectTransform rectB = b.GetComponent<RectTransform>();
-                    return rectA.anchoredPosition.y.CompareTo(rectB.anchoredPosition.y);
-                });
-                
-                // 调整弹幕垂直位置
-                float lastYPos = GetChatWindowBottomEdge();
-                for (int j = 0; j < columnDanmakus[i].Count; j++)
-                {
-                    GameObject danmaku = columnDanmakus[i][j];
-                    RectTransform rectTransform = danmaku.GetComponent<RectTransform>();
-                    
-                    if (!allowOverlap) // 如果不允许重叠
-                    {
-                        float danmakuHeight = rectTransform.rect.height;
-                        float desiredYPos = lastYPos + danmakuHeight / 2 + verticalSpacing;
-                        
-                        // 只有当希望位置比当前位置低时才上移
-                        if (desiredYPos > rectTransform.anchoredPosition.y)
-                        {
-                            Vector2 pos = rectTransform.anchoredPosition;
-                            pos.y = desiredYPos;
-                            rectTransform.anchoredPosition = pos;
-                        }
-                        
-                        lastYPos = rectTransform.anchoredPosition.y + danmakuHeight / 2;
-                    }
-                }
+                item = danmaku.AddComponent<DanmakuItem>();
+            }
+            item.Initialize(content, username, type);
+            item.speed = defaultSpeed;
+
+            Debug.Log($"生成弹幕 - 位置: {rectTransform.anchoredPosition}");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"显示弹幕时发生错误: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 外部调用生成弹幕
+    /// </summary>
+    public void ShowDanmaku(string content, string username = "观众", int type = 1)
+    {
+        EnqueueDanmaku(content, username, type);
+    }
+
+    /// <summary>
+    /// 根据类型生成随机弹幕（简化的外部调用接口）
+    /// </summary>
+    /// <param name="type">弹幕类型：1=普通弹幕，2=SC，3=恶评</param>
+    public void GenerateRandomDanmaku(int type)
+    {
+        try
+        {
+            Caption caption = DataManager.Instance.GetRandomCaptionsByType(type);
+            if (caption != null)
+            {
+                EnqueueDanmaku(caption.text, caption.name, type);
+                Debug.Log($"生成类型 {type} 的随机弹幕");
+            }
+            else
+            {
+                Debug.LogWarning($"无法获取类型 {type} 的随机弹幕数据");
             }
         }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"生成随机弹幕时发生错误: {e.Message}");
+        }
     }
 
     /// <summary>
-    /// 获取可用列
+    /// 批量生成指定类型的随机弹幕
     /// </summary>
-    private int GetAvailableColumn()
+    /// <param name="type">弹幕类型</param>
+    /// <param name="count">生成数量</param>
+    public void GenerateRandomDanmakuBatch(int type, int count)
     {
-        // 找出最空闲的列（上边缘位置最小的）
-        int bestColumn = 0;
-        float minTopEdge = float.MaxValue;
-        
-        for (int i = 0; i < columnCount; i++)
+        if (count <= 0) return;
+
+        try
         {
-            if (columnTopEdges[i] < minTopEdge)
+            for (int i = 0; i < count; i++)
             {
-                minTopEdge = columnTopEdges[i];
-                bestColumn = i;
+                GenerateRandomDanmaku(type);
+            }
+            Debug.Log($"批量生成 {count} 条类型 {type} 的随机弹幕");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"批量生成随机弹幕时发生错误: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 清空弹幕队列
+    /// </summary>
+    public void ClearDanmakuQueue()
+    {
+        danmakuQueue.Clear();
+    }
+
+    /// <summary>
+    /// 重置播放数和间隔
+    /// </summary>
+    public void ResetPlayCount()
+    {
+        playCount = 0;
+        currentInterval = baseInterval;
+        danmakuTimer = currentInterval;
+        Debug.Log("重置播放数和弹幕间隔");
+    }
+
+    /// <summary>
+    /// 返回弹幕到对象池
+    /// </summary>
+    public void ReturnDanmaku(GameObject danmaku, int type)
+    {
+        if (danmaku == null)
+        {
+            Debug.LogWarning("尝试返回空弹幕对象！");
+            return;
+        }
+
+        if (danmakuPools != null)
+        {
+            try
+            {
+                danmakuPools.ReturnDanmaku(danmaku, type);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"返回弹幕到对象池时发生错误: {e.Message}");
             }
         }
-        
-        return bestColumn;
-    }
-
-    /// <summary>
-    /// 获取列X坐标位置
-    /// </summary>
-    private float GetColumnXPosition(int columnIndex)
-    {
-        // 计算聊天窗口宽度
-        float chatWindowWidth = GetChatWindowWidth();
-        // 计算聊天窗口左边缘
-        float chatWindowLeft = chatWindowRect != null ? chatWindowRect.rect.xMin : 0f;
-        
-        // 均匀分配列的位置，确保垂直对齐
-        float columnSpacingTotal = chatWindowWidth / (columnCount + 1);
-        // 从左到右布局列，返回列的中心X坐标
-        return chatWindowLeft + columnSpacingTotal * (columnIndex + 1);
-    }
-
-    /// <summary>
-    /// 获取列起始Y坐标位置（弹幕从此位置开始向上移动）
-    /// </summary>
-    private float GetColumnYStartPosition(int columnIndex, float danmakuHeight)
-    {
-        // 获取聊天窗口底部边缘
-        float chatWindowBottom = GetChatWindowBottomEdge();
-        // 弹幕底部边缘与聊天窗口底部对齐
-        return chatWindowBottom + danmakuHeight * 0.5f;
-    }
-
-    #region 公共方法
-    /// <summary>
-    /// 显示普通弹幕
-    /// </summary>
-    public void ShowNormalDanmaku(string content, string username = "观众")
-    {
-        // 检查最大数量限制
-        if (activeDanmakus.Count >= maxDanmakuCount)
+        else
         {
-            // 找到最老的弹幕并回收
-            GameObject oldestDanmaku = activeDanmakus[0];
-            ReturnToPool(oldestDanmaku);
+            Debug.LogWarning("对象池未初始化，直接销毁弹幕对象");
+            Destroy(danmaku);
         }
-
-        // 获取可用列
-        int columnIndex = GetAvailableColumn();
-        
-        // 获取弹幕对象
-        GameObject danmaku = GetPoolItem(normalDanmakuPool, normalDanmakuPrefab);
-        
-        // 设置内容
-        TextMeshProUGUI contentText = danmaku.GetComponentInChildren<TextMeshProUGUI>();
-        if (contentText != null)
-        {
-            contentText.text = string.IsNullOrEmpty(username) ? content : $"{username}: {content}";
-            contentText.alignment = TextAlignmentOptions.Center; // 文本居中对齐
-        }
-        
-        // 设置位置和尺寸
-        RectTransform rectTransform = danmaku.GetComponent<RectTransform>();
-        if (rectTransform != null)
-        {
-            // 确保弹幕宽度合适
-            rectTransform.sizeDelta = new Vector2(danmakuWidth, rectTransform.sizeDelta.y);
-            
-            // 计算起始位置
-            float xPosition = GetColumnXPosition(columnIndex);
-            float yPosition = GetColumnYStartPosition(columnIndex, rectTransform.rect.height);
-            
-            // 设置弹幕位置
-            rectTransform.anchoredPosition = new Vector2(xPosition, yPosition);
-            
-            // 更新列占用情况
-            columnTopEdges[columnIndex] = yPosition + rectTransform.rect.height / 2;
-        }
-        
-        // 初始化弹幕项组件
-        DanmakuItem item = danmaku.GetComponent<DanmakuItem>();
-        if (item == null)
-        {
-            item = danmaku.AddComponent<DanmakuItem>();
-        }
-        item.Initialize(content, username, columnIndex, defaultSpeed);
-    }
-
-    /// <summary>
-    /// 显示SC弹幕(打赏)
-    /// </summary>
-    public void ShowSuperChatDanmaku(string content, string username)
-    {
-        int columnIndex = GetAvailableColumn();
-        
-        GameObject danmaku = GetPoolItem(superChatPool, superChatPrefab);
-        
-        // 设置内容和用户名
-        TextMeshProUGUI contentText = danmaku.GetComponentInChildren<TextMeshProUGUI>();
-        if (contentText != null)
-        {
-            // 为SC弹幕添加特殊格式
-            contentText.text = $"{username}: {content}";
-            contentText.alignment = TextAlignmentOptions.Center; // 文本居中对齐
-        }
-        
-        // 设置位置和尺寸
-        RectTransform rectTransform = danmaku.GetComponent<RectTransform>();
-        if (rectTransform != null)
-        {
-            // SC弹幕通常会比普通弹幕宽一些
-            rectTransform.sizeDelta = new Vector2(danmakuWidth * 1.2f, rectTransform.sizeDelta.y);
-            
-            // 计算起始位置
-            float xPosition = GetColumnXPosition(columnIndex);
-            float yPosition = GetColumnYStartPosition(columnIndex, rectTransform.rect.height);
-            
-            // 设置弹幕位置
-            rectTransform.anchoredPosition = new Vector2(xPosition, yPosition);
-            
-            // 更新列占用情况
-            columnTopEdges[columnIndex] = yPosition + rectTransform.rect.height / 2;
-        }
-        
-        // 初始化弹幕项
-        DanmakuItem item = danmaku.GetComponent<DanmakuItem>();
-        if (item == null)
-        {
-            item = danmaku.AddComponent<DanmakuItem>();
-        }
-        // SC弹幕移动较慢，给予较长生命周期
-        item.Initialize(content, username, columnIndex, defaultSpeed * 0.7f);
-    }
-
-    /// <summary>
-    /// 显示负面弹幕
-    /// </summary>
-    public void ShowBadDanmaku(string content, string username = "观众")
-    {
-        int columnIndex = GetAvailableColumn();
-        
-        GameObject danmaku = GetPoolItem(badDanmakuPool, badDanmakuPrefab);
-        
-        // 设置内容
-        TextMeshProUGUI contentText = danmaku.GetComponentInChildren<TextMeshProUGUI>();
-        if (contentText != null)
-        {
-            contentText.text = string.IsNullOrEmpty(username) ? content : $"{username}: {content}";
-            contentText.alignment = TextAlignmentOptions.Center; // 文本居中对齐
-        }
-        
-        // 设置位置和尺寸
-        RectTransform rectTransform = danmaku.GetComponent<RectTransform>();
-        if (rectTransform != null)
-        {
-            rectTransform.sizeDelta = new Vector2(danmakuWidth, rectTransform.sizeDelta.y);
-            
-            // 计算起始位置
-            float xPosition = GetColumnXPosition(columnIndex);
-            float yPosition = GetColumnYStartPosition(columnIndex, rectTransform.rect.height);
-            
-            // 设置弹幕位置
-            rectTransform.anchoredPosition = new Vector2(xPosition, yPosition);
-            
-            // 更新列占用情况
-            columnTopEdges[columnIndex] = yPosition + rectTransform.rect.height / 2;
-        }
-        
-        // 初始化弹幕项
-        DanmakuItem item = danmaku.GetComponent<DanmakuItem>();
-        if (item == null)
-        {
-            item = danmaku.AddComponent<DanmakuItem>();
-        }
-        item.Initialize(content, username, columnIndex, defaultSpeed * 0.9f);
-    }
-
-    /// <summary>
-    /// 显示特殊弹幕
-    /// </summary>
-    public void ShowSpecialDanmaku(string content, string username = "系统")
-    {
-        int columnIndex = GetAvailableColumn();
-        
-        GameObject danmaku = GetPoolItem(specialDanmakuPool, specialDanmakuPrefab);
-        
-        // 设置内容
-        TextMeshProUGUI contentText = danmaku.GetComponentInChildren<TextMeshProUGUI>();
-        if (contentText != null)
-        {
-            contentText.text = string.IsNullOrEmpty(username) ? content : $"{username}: {content}";
-            contentText.alignment = TextAlignmentOptions.Center; // 文本居中对齐
-        }
-        
-        // 设置位置和尺寸
-        RectTransform rectTransform = danmaku.GetComponent<RectTransform>();
-        if (rectTransform != null)
-        {
-            // 特殊弹幕通常会比普通弹幕宽一些
-            rectTransform.sizeDelta = new Vector2(danmakuWidth * 1.5f, rectTransform.sizeDelta.y);
-            
-            // 计算起始位置
-            float xPosition = GetColumnXPosition(columnIndex);
-            float yPosition = GetColumnYStartPosition(columnIndex, rectTransform.rect.height);
-            
-            // 设置弹幕位置
-            rectTransform.anchoredPosition = new Vector2(xPosition, yPosition);
-            
-            // 更新列占用情况
-            columnTopEdges[columnIndex] = yPosition + rectTransform.rect.height / 2;
-        }
-        
-        // 初始化弹幕项
-        DanmakuItem item = danmaku.GetComponent<DanmakuItem>();
-        if (item == null)
-        {
-            item = danmaku.AddComponent<DanmakuItem>();
-        }
-        // 特殊弹幕移动较慢，给予较长生命周期
-        item.Initialize(content, username, columnIndex, defaultSpeed * 0.6f);
     }
 
     /// <summary>
@@ -576,71 +404,16 @@ public class DanmakuManager : MonoBehaviour
     /// </summary>
     public void ClearAllDanmakus()
     {
-        // 复制列表以避免在遍历时修改集合
-        List<GameObject> danmakusToRemove = new List<GameObject>(activeDanmakus);
-        
-        foreach (GameObject danmaku in danmakusToRemove)
+        if (danmakuPools != null)
         {
-            ReturnToPool(danmaku);
-        }
-        
-        // 重置列状态
-        ResetColumnTopEdges();
-    }
-
-    /// <summary>
-    /// 设置弹幕速度
-    /// </summary>
-    public void SetDanmakuSpeed(float speed)
-    {
-        defaultSpeed = speed;
-        
-        // 更新现有弹幕的速度
-        foreach (GameObject danmaku in activeDanmakus)
-        {
-            DanmakuItem item = danmaku.GetComponent<DanmakuItem>();
-            if (item != null)
+            try
             {
-                item.speed = speed;
+                danmakuPools.ClearAllPools();
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"清空弹幕时发生错误: {e.Message}");
             }
         }
     }
-
-    /// <summary>
-    /// 设置弹幕最大数量
-    /// </summary>
-    public void SetMaxDanmakuCount(int count)
-    {
-        maxDanmakuCount = count;
-        
-        // 如果当前活跃弹幕数超过新限制，删除多余弹幕
-        while (activeDanmakus.Count > maxDanmakuCount && activeDanmakus.Count > 0)
-        {
-            GameObject danmakuToRemove = activeDanmakus[0];
-            ReturnToPool(danmakuToRemove);
-        }
-    }
-    
-    /// <summary>
-    /// 设置弹幕宽度
-    /// </summary>
-    public void SetDanmakuWidth(float width)
-    {
-        danmakuWidth = width;
-        
-        // 注意：这只会影响新生成的弹幕
-    }
-    
-    /// <summary>
-    /// 设置列数
-    /// </summary>
-    public void SetColumnCount(int count)
-    {
-        if (count < 1) count = 1;
-        
-        columnCount = count;
-        columnTopEdges = new float[columnCount];
-        ResetColumnTopEdges();
-    }
-    #endregion
 }

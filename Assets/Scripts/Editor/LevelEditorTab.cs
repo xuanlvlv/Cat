@@ -25,7 +25,7 @@ public class LevelEditorTab : EditorTab
 
     private BrushType currentBrushType;
     private BlockType currentBlockType;
-    private BoosterType currentBoosterType;
+    private SpecialTileType currentBoosterType;
     private PlayerType currentPlayerType;
 
     private enum BrushMode
@@ -221,7 +221,7 @@ public class LevelEditorTab : EditorTab
         {
             GUILayout.BeginHorizontal();
             EditorGUILayout.LabelField(new GUIContent("道具画块", "道具画块特殊画块"), GUILayout.Width(EditorGUIUtility.labelWidth));
-            currentBoosterType = (BoosterType)EditorGUILayout.EnumPopup(currentBoosterType, GUILayout.Width(120));
+            currentBoosterType = (SpecialTileType)EditorGUILayout.EnumPopup(currentBoosterType, GUILayout.Width(120));
             GUILayout.EndHorizontal();
         }
         else if(currentBrushType == BrushType.Player)

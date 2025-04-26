@@ -1,9 +1,6 @@
 using System.Collections.Generic;
 
 
-/// <summary>
-/// �洢��Ϸ�ؿ�������
-/// </summary>
 public class Level
 {
     public int id;

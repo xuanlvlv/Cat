@@ -13,8 +13,15 @@ public class GamePools : MonoBehaviour
     [Header("数字方块对象池")]
     public ObjectPool[] numberPools = new ObjectPool[9]; // 数字1-9的对象池
 
-    [Header("特殊方块对象池")]
+    [Header("阻挡方块对象池")]
     public ObjectPool wallPool;
+
+    [Header("特殊方块对象池")]
+    public ObjectPool FansTilePool;
+    public ObjectPool MoneyTilePool;
+    public ObjectPool MoodAddTile;
+    public ObjectPool MoodReduceTilePool;
+
 
     // 用字典快速查找对象池
     private Dictionary<BlockType, ObjectPool> blockPoolsMap = new Dictionary<BlockType, ObjectPool>();
@@ -92,6 +99,26 @@ public class GamePools : MonoBehaviour
         if (tile is BlockTile blockTile)
         {
             return GetBlockTileEntity(level, blockTile);
+        }
+        else if (tile is BoosterTile specialTile)
+        {
+            // 处理特殊方块
+            if (specialTile.type == SpecialTileType.FansIncrease)
+            {
+                return FansTilePool.GetObject().GetComponent<TileEntity>();
+            }
+            else if (specialTile.type == SpecialTileType.MoneyIncrease)
+            {
+                return MoneyTilePool.GetObject().GetComponent<TileEntity>();
+            }
+            else if (specialTile.type == SpecialTileType.MoodIncrease)
+            {
+                return MoodAddTile.GetObject().GetComponent<TileEntity>();
+            }
+            else if (specialTile.type == SpecialTileType.MoodDecrease)
+            {
+                return MoodReduceTilePool.GetObject().GetComponent<TileEntity>();
+            }
         }
         else if (tile is PlayerTile playerTile)
         {

@@ -24,7 +24,7 @@ public class BlockTile : LevelTile
 /// </summary>
 public class BoosterTile : LevelTile
 {
-    public BoosterType type;
+    public SpecialTileType type;
 }
 
 public class PlayerTile : LevelTile

@@ -158,7 +158,7 @@ public class Player : TileEntity
         // 如果目标位置没有对象，直接返回false
         if (targetObject == null)
             return false;
-            
+
         // 检查是否是数字方块
         if (targetObject.TryGetComponent<NumTile>(out var numTile))
         {
@@ -167,71 +167,71 @@ public class Player : TileEntity
             {
                 // 播放消除音效
                 // TODO: 添加消除音效
-                
+
                 // 增加播放数
                 if (UIManager.Instance != null)
                 {
                     UIManager.Instance.AddViews(numTile.num);
                 }
-                
+
                 // 记录目标位置
                 Vector3 oldPosition = targetObject.transform.position;
-                
+
                 // 删除目标方块
                 Destroy(targetObject);
-                
+
                 // 更新玩家数字并移动
                 playerNumber = numTile.num;
-                
+
                 // 设置目标位置并启动移动动画
                 StartMoving(oldPosition);
-                
+
                 return true;
             }
-            
+
             // 只有当玩家数字大于等于方块数字时才能交互
-            if (playerNumber >= numTile.num || playerNumber ==0)
+            if (playerNumber >= numTile.num || playerNumber == 0)
             {
                 // 增加播放数
                 if (UIManager.Instance != null)
                 {
                     UIManager.Instance.AddViews(numTile.num);
                 }
-                
+
                 // 根据运算符处理数字
                 switch (operatorType)
                 {
                     case OperatorType.Add:
                         playerNumber += numTile.num;
                         break;
-                        
+
                     case OperatorType.Sub:
                         playerNumber -= numTile.num;
-                        break;    
-                        
+                        break;
+
                     default:
                         Debug.LogWarning("未知的运算符类型");
                         return false;
                 }
-                
+
                 // 处理运算结果
                 ProcessNumberResult();
-                
+
                 // 播放消除音效
                 // TODO: 添加消除音效
-                
+
                 // 记录目标位置
                 Vector3 oldPosition = targetObject.transform.position;
-                
+
                 // 删除目标方块
                 Destroy(targetObject);
-                
+
                 // 设置目标位置并启动移动动画
                 StartMoving(oldPosition);
-                
+
                 return true;
             }
-            
+
             // 玩家数字小于方块数字，不能交互
             return false;
         }
@@ -239,13 +239,21 @@ public class Player : TileEntity
         {
             // 处理道具方块
             propTile.Explode();
-            
+
             // 设置目标位置并启动移动动画
             StartMoving(propTile.transform.position);
-            
+
             return true;
         }
-        
+        else if (targetObject.TryGetComponent<SpecialTile>(out var specialTile))
+        {
+            specialTile.TriggerEffect();
+
+            // 修正：使用specialTile而不是propTile
+            StartMoving(specialTile.transform.position);
+
+            return true;
+        }
         // 其他类型的方块，无法交互
         return false;
     }
